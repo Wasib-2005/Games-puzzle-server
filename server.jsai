@@ -1,0 +1,134 @@
+import express from "express";
+import cors from "cors";
+import dotenv from "dotenv";
+import axios from "axios";
+
+dotenv.config();
+
+const app = express();
+app.use(express.json());
+app.use(cors());
+
+// Topics & subtopics (same as your Python version)
+const topics = {
+  "Computer Science": ["HTML", "CSS", "Python", "Java", "JavaScript", "Operating System", "DSA"],
+  Mathematics: ["Arithmetic", "Geometry", "Algebra", "Trigonometry", "Calculus", "Probability", "Statistics", "Discrete Mathematics"],
+  Science: ["Physics", "Chemistry", "Biology", "Biochemistry", "Astronomy"],
+  Philosophy: ["Metaphysics", "Ethics", "Epistemology", "Logic", "Aesthetics", "Existentialism & Phenomenology"],
+  Automobile: ["IC Engine", "EC Engine", "Electric Vehicle", "Automotive Electronics"]
+};
+
+// Generate dummy questions (fallback)
+function generateDummyQuestions(topic, subtopic, difficulty) {
+  const questions = [];
+  const templates = [
+    { q: "What is {a} + {b}?", ans: "{res}" },
+    { q: "What is {a} - {b}?", ans: "{res}" },
+    { q: "If you have {a} apples and give away {b}, how many are left?", ans: "{res}" },
+    { q: "Which number logically follows: {x}, {y}, {z}, ?", ans: "{res}" }
+  ];
+
+  for (let i = 0; i < 5; i++) {
+    const a = Math.floor(Math.random() * 30) + 1;
+    const b = Math.floor(Math.random() * 20);
+    const t = templates[Math.floor(Math.random() * templates.length)];
+    let res = 0;
+    if (t.q.includes("+")) res = a + b;
+    else res = Math.max(0, a - b);
+
+    let qText = t.q.replace("{a}", a).replace("{b}", b).replace("{x}", a).replace("{y}", b).replace("{z}", a+b);
+    const correct = String(res);
+    let options = [correct, String(res+1), String(Math.max(0,res-1)), String(res+2)];
+    options = options.sort(() => Math.random() - 0.5);
+
+    questions.push({
+      question: `[${topic}/${subtopic}] ${qText}`,
+      options,
+      correct_index: options.indexOf(correct),
+      explanation: t.ans.replace("{a}", a).replace("{b}", b).replace("{res}", res)
+    });
+  }
+
+  return questions;
+}
+
+// Extract AI text from Gemini response
+function extractAIText(candidate) {
+  if (!candidate || !candidate.content) return "";
+  let texts = [];
+
+  function processContent(content) {
+    if (Array.isArray(content)) {
+      content.forEach(processContent);
+    } else if (content && typeof content === "object") {
+      if (content.text) texts.push(content.text);
+      else if (content.parts) processContent(content.parts);
+    }
+  }
+
+  processContent(candidate.content);
+  return texts.join(" ");
+}
+
+// Validate questions (ensure 4 options and correct_index)
+function validateQuestion(q) {
+  if (!q || !Array.isArray(q.options) || q.options.length !== 4) return null;
+  if (typeof q.correct_index !== "number" || q.correct_index < 0 || q.correct_index > 3) {
+    q.correct_index = 0; // fallback
+  }
+  return q;
+}
+
+// Main quiz generator
+async function getQuestions(topic, subtopic, difficulty) {
+  const API_KEY = process.env.GOOGLE_API_KEY?.trim();
+  if (!API_KEY) return generateDummyQuestions(topic, subtopic, difficulty);
+
+  try {
+    const prompt = `Generate 5 diverse multiple-choice questions for ${topic} - ${subtopic} with difficulty ${difficulty}. 
+    Vary stems and numeric values; avoid repeating templates. 
+    Output JSON array only. Schema: {"question": string, "options": [4 strings], "correct_index": int(0-3), "explanation": string}`;
+
+    const response = await axios.post(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+      {
+        contents: [{ parts: [{ text: prompt }] }]
+      },
+      { headers: { "Content-Type": "application/json", "X-goog-api-key": API_KEY } }
+    );
+
+    const candidate = response.data?.candidates?.[0];
+    const rawText = extractAIText(candidate);
+
+    if (!rawText) return generateDummyQuestions(topic, subtopic, difficulty);
+
+    // Try to parse JSON array from rawText
+    let data = [];
+    try {
+      const match = rawText.match(/\[.*\]/s);
+      if (match) data = JSON.parse(match[0]);
+    } catch (err) { data = []; }
+
+    const validated = data.map(validateQuestion).filter(q => q).slice(0, 5);
+    return validated.length > 0 ? validated : generateDummyQuestions(topic, subtopic, difficulty);
+
+  } catch (err) {
+    console.error("AI generation failed, using dummy questions:", err.message);
+    return generateDummyQuestions(topic, subtopic, difficulty);
+  }
+}
+
+// API endpoints
+app.get("/topics", (req, res) => {
+  res.json(topics);
+});
+
+app.post("/generate-quiz", async (req, res) => {
+  const { topic, subtopic, difficulty } = req.body;
+  if (!topic || !subtopic) return res.status(400).json({ error: "Topic and subtopic required" });
+  const questions = await getQuestions(topic, subtopic, difficulty || "3");
+  res.json(questions);
+});
+
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => console.log(`Server running at http://localhost:${PORT}`));
