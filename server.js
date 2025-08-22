@@ -6,7 +6,11 @@ dotenv.config();
 
 const app = express();
 app.use(express.json());
-app.use(cors());
+
+// Allow CORS for all origins (you can restrict to your domain if needed)
+app.use(cors({
+  origin: ["https://games-puzzle.onrender.com", "*"] // "*" allows all, or specify your frontend
+}));
 
 // Static topics
 const topics = {
@@ -56,8 +60,8 @@ app.get("/topics", (req, res) => {
   res.json(topics);
 });
 
-app.post("/generate-quiz", (req, res) => {
-  // Ignore API call, always return static data
+// Changed route to /quiz to match your requirement
+app.get("/quiz", (req, res) => {
   res.json(staticQuestions);
 });
 
