@@ -1,18 +1,22 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import axios from "axios";
 
 dotenv.config();
 
 const app = express();
-app.use(express.json());
 
-// Allow CORS for all origins (you can restrict to your domain if needed)
+// Enable CORS for all websites
 app.use(cors({
-  origin: ["https://games-puzzle.onrender.com", "*"] // "*" allows all, or specify your frontend
+  origin: "*", // allow all origins
+  methods: ["GET", "POST"], // allow GET and POST requests
+  allowedHeaders: ["Content-Type", "Authorization"], // allowed headers
 }));
 
-// Static topics
+app.use(express.json());
+
+// Topics & subtopics
 const topics = {
   "Computer Science": ["HTML", "CSS", "Python", "Java", "JavaScript", "Operating System", "DSA"],
   Mathematics: ["Arithmetic", "Geometry", "Algebra", "Trigonometry", "Calculus", "Probability", "Statistics", "Discrete Mathematics"],
@@ -21,50 +25,106 @@ const topics = {
   Automobile: ["IC Engine", "EC Engine", "Electric Vehicle", "Automotive Electronics"]
 };
 
-// Static quiz data
-const staticQuestions = [
-  {
-    question: "Solve for x: x + 5 = 12",
-    options: ["7", "17", "60", "-7"],
-    correct_index: 0,
-    explanation: "Subtract 5 from both sides of the equation: x + 5 - 5 = 12 - 5, so x = 7."
-  },
-  {
-    question: "Which expression represents 'twice a number'?",
-    options: ["x + 2", "x - 2", "2x", "x/2"],
-    correct_index: 2,
-    explanation: "Twice a number means multiplying the number by 2, which is 2x."
-  },
-  {
-    question: "If y = 3x, what is the value of y when x = 4?",
-    options: ["1", "7", "12", "1/12"],
-    correct_index: 2,
-    explanation: "Substitute x = 4 into y = 3x, giving y = 12."
-  },
-  {
-    question: "Simplify: 5a + 2a - a",
-    options: ["6a", "8a", "7a", "5a"],
-    correct_index: 0,
-    explanation: "Combine like terms: 5a + 2a - a = 6a."
-  },
-  {
-    question: "What is the value of 'n' in the equation n/2 = 8?",
-    options: ["4", "10", "16", "6"],
-    correct_index: 2,
-    explanation: "Multiply both sides by 2 to get n = 16."
+// Generate dummy questions
+function generateDummyQuestions(topic, subtopic, difficulty, count = 5) {
+  const questions = [];
+  const templates = [
+    { q: "What is {a} + {b}?", ans: "{res}" },
+    { q: "What is {a} - {b}?", ans: "{res}" },
+    { q: "If you have {a} apples and give away {b}, how many are left?", ans: "{res}" },
+    { q: "Which number logically follows: {x}, {y}, {z}, ?", ans: "{res}" }
+  ];
+
+  for (let i = 0; i < count; i++) {
+    const a = Math.floor(Math.random() * 30) + 1;
+    const b = Math.floor(Math.random() * 20);
+    const t = templates[Math.floor(Math.random() * templates.length)];
+    let res = t.q.includes("+") ? a + b : Math.max(0, a - b);
+
+    let qText = t.q.replace("{a}", a).replace("{b}", b).replace("{x}", a).replace("{y}", b).replace("{z}", a+b);
+    const correct = String(res);
+    let options = [correct, String(res+1), String(Math.max(0,res-1)), String(res+2)];
+    options = options.sort(() => Math.random() - 0.5);
+
+    questions.push({
+      question: `[${topic}/${subtopic}] ${qText}`,
+      options,
+      correct_index: options.indexOf(correct),
+      explanation: t.ans.replace("{a}", a).replace("{b}", b).replace("{res}", res)
+    });
   }
-];
+
+  return questions;
+}
+
+// Extract AI text
+function extractAIText(candidate) {
+  if (!candidate || !candidate.content) return "";
+  let texts = [];
+  function processContent(content) {
+    if (Array.isArray(content)) content.forEach(processContent);
+    else if (content && typeof content === "object") {
+      if (content.text) texts.push(content.text);
+      else if (content.parts) processContent(content.parts);
+    }
+  }
+  processContent(candidate.content);
+  return texts.join(" ");
+}
+
+// Validate question
+function validateQuestion(q) {
+  if (!q || !Array.isArray(q.options) || q.options.length !== 4) return null;
+  if (typeof q.correct_index !== "number" || q.correct_index < 0 || q.correct_index > 3) {
+    q.correct_index = 0;
+  }
+  return q;
+}
+
+// Main quiz generator
+async function getQuestions(topic, subtopic, difficulty, count = 5) {
+  const API_KEY = process.env.GOOGLE_API_KEY?.trim();
+  if (!API_KEY) return generateDummyQuestions(topic, subtopic, difficulty, count);
+
+  try {
+    const prompt = `Generate ${count} diverse multiple-choice questions for ${topic} - ${subtopic} with difficulty ${difficulty}. 
+Vary stems and numeric values; avoid repeating templates. 
+Output JSON array only. Schema: {"question": string, "options": [4 strings], "correct_index": int(0-3), "explanation": string}`;
+
+    const response = await axios.post(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+      { contents: [{ parts: [{ text: prompt }] }] },
+      { headers: { "Content-Type": "application/json", "X-goog-api-key": API_KEY } }
+    );
+
+    const candidate = response.data?.candidates?.[0];
+    const rawText = extractAIText(candidate);
+    if (!rawText) return generateDummyQuestions(topic, subtopic, difficulty, count);
+
+    let data = [];
+    try {
+      const match = rawText.match(/\[.*\]/s);
+      if (match) data = JSON.parse(match[0]);
+    } catch { data = []; }
+
+    const validated = data.map(validateQuestion).filter(q => q).slice(0, count);
+    return validated.length > 0 ? validated : generateDummyQuestions(topic, subtopic, difficulty, count);
+
+  } catch (err) {
+    console.error("AI generation failed, using dummy questions:", err.message);
+    return generateDummyQuestions(topic, subtopic, difficulty, count);
+  }
+}
 
 // API endpoints
-app.get("/topics", (req, res) => {
-  res.json(topics);
+app.get("/topics", (req, res) => res.json(topics));
+
+app.post("/generate-quiz", async (req, res) => {
+  const { topic, subtopic, difficulty, numQuestions } = req.body;
+  if (!topic || !subtopic) return res.status(400).json({ error: "Topic and subtopic required" });
+  const questions = await getQuestions(topic, subtopic, difficulty || "easy", numQuestions || 5);
+  res.json(questions);
 });
 
-// Changed route to /quiz to match your requirement
-app.get("/quiz", (req, res) => {
-  res.json(staticQuestions);
-});
-
-// Start server
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running at http://localhost:${PORT}`));
