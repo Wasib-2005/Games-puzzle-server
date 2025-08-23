@@ -25,37 +25,7 @@ const topics = {
   Automobile: ["IC Engine", "EC Engine", "Electric Vehicle", "Automotive Electronics"]
 };
 
-// Generate dummy questions
-function generateDummyQuestions(topic, subtopic, difficulty, count = 5) {
-  const questions = [];
-  const templates = [
-    { q: "What is {a} + {b}?", ans: "{res}" },
-    { q: "What is {a} - {b}?", ans: "{res}" },
-    { q: "If you have {a} apples and give away {b}, how many are left?", ans: "{res}" },
-    { q: "Which number logically follows: {x}, {y}, {z}, ?", ans: "{res}" }
-  ];
 
-  for (let i = 0; i < count; i++) {
-    const a = Math.floor(Math.random() * 30) + 1;
-    const b = Math.floor(Math.random() * 20);
-    const t = templates[Math.floor(Math.random() * templates.length)];
-    let res = t.q.includes("+") ? a + b : Math.max(0, a - b);
-
-    let qText = t.q.replace("{a}", a).replace("{b}", b).replace("{x}", a).replace("{y}", b).replace("{z}", a+b);
-    const correct = String(res);
-    let options = [correct, String(res+1), String(Math.max(0,res-1)), String(res+2)];
-    options = options.sort(() => Math.random() - 0.5);
-
-    questions.push({
-      question: `[${topic}/${subtopic}] ${qText}`,
-      options,
-      correct_index: options.indexOf(correct),
-      explanation: t.ans.replace("{a}", a).replace("{b}", b).replace("{res}", res)
-    });
-  }
-
-  return questions;
-}
 
 // Extract AI text
 function extractAIText(candidate) {
@@ -84,7 +54,7 @@ function validateQuestion(q) {
 // Main quiz generator
 async function getQuestions(topic, subtopic, difficulty, count = 5) {
   const API_KEY = process.env.GOOGLE_API_KEY?.trim();
-  if (!API_KEY) return generateDummyQuestions(topic, subtopic, difficulty, count);
+ 
 
   try {
     const prompt = `Generate ${count} diverse multiple-choice questions for ${topic} - ${subtopic} with difficulty ${difficulty}. 
@@ -99,7 +69,6 @@ Output JSON array only. Schema: {"question": string, "options": [4 strings], "co
 
     const candidate = response.data?.candidates?.[0];
     const rawText = extractAIText(candidate);
-    if (!rawText) return generateDummyQuestions(topic, subtopic, difficulty, count);
 
     let data = [];
     try {
@@ -112,7 +81,6 @@ Output JSON array only. Schema: {"question": string, "options": [4 strings], "co
 
   } catch (err) {
     console.error("AI generation failed, using dummy questions:", err.message);
-    return generateDummyQuestions(topic, subtopic, difficulty, count);
   }
 }
 
@@ -121,6 +89,7 @@ app.get("/topics", (req, res) => res.json(topics));
 
 app.post("/generate-quiz", async (req, res) => {
   const { topic, subtopic, difficulty, numQuestions } = req.body;
+  console.log(numQuestions)
   if (!topic || !subtopic) return res.status(400).json({ error: "Topic and subtopic required" });
   const questions = await getQuestions(topic, subtopic, difficulty || "easy", numQuestions || 5);
   res.json(questions);
